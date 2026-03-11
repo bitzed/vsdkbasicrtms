@@ -8,6 +8,8 @@ let videoDecode
 let videoEncode
 let audioDecode
 let audioEncode
+let sessionId = null
+let rtmsClient = null
 
 ////////////////////////////////////////////////////////////////////////
 //
@@ -15,6 +17,8 @@ document.addEventListener("DOMContentLoaded", function() {
   document.getElementById('user_name').value = "User" + Math.floor(Math.random() * 100)
   document.getElementById('join-button').addEventListener('click', joinSession)
   document.getElementById('leave-button').addEventListener('click', leaveSession)
+  document.getElementById('rtms-start-button').addEventListener('click', startRTMS)
+  document.getElementById('rtms-stop-button').addEventListener('click', stopRTMS)
   console.log('DOMContentLoaded')
 })
 
@@ -32,7 +36,6 @@ async function joinSession() {
 
   //INIT VSDK CLIENT
   client.init('en-US', 'CDN')
-  //client.init('en-US', location.origin + '/lib')
 
   //LISTEN FOR CONNECTION STATUS
   client.on('connection-change', (payload) => {
@@ -47,34 +50,21 @@ async function joinSession() {
       console.log("media-sdk-change: " + JSON.stringify(payload))
       if (payload.type === 'video' && payload.result === 'success') {
         if (payload.action === 'encode') {
-          // encode for sending video stream
           videoEncode = true
         } else if (payload.action === 'decode') {
-          // decode for receiving video stream
           videoDecode = true
         }
       }
       if (payload.type === 'audio' && payload.result === 'success') {
         if (payload.action === 'encode') {
-          // encode for sending audio stream (speak)
           audioEncode = true
         } else if (payload.action === 'decode') {
-          // decode for receiving audio stream (hear)
           audioDecode = true
-        }
-      }
-      if (payload.type === 'share' && payload.result === 'success') {
-        if (payload.action === 'encode') {
-          // encode for sending share stream
-          shareEncode = true
-        } else if (payload.action === 'decode') {
-          // decode for receiving share stream
-          shareDecode = true
         }
       }
   })
 
-  //LISETN TO FAREND VIDEO STATUS
+  //LISTEN TO FAR END VIDEO STATUS
   client.on('peer-video-state-change', (payload) => {
    console.log("peer-video-state-change: " + JSON.stringify(payload))
    if (payload.action === 'Start') {
@@ -84,12 +74,10 @@ async function joinSession() {
        console.log("wait untill videoDecode gets enabled")
        waitForVideoDecoder(500, payload.userId)
      }
-
    } else if (payload.action === 'Stop') {
       toggleFarVideo(stream, payload.userId, false)
    }
   })
-
 
   // added listener for dimension change
   client.on('video-dimension-change', payload => {
@@ -100,7 +88,7 @@ async function joinSession() {
   let topic = document.getElementById('session_topic').value
   let userName = document.getElementById('user_name').value
   let password = document.getElementById('session_pwd').value
-  let role = document.getElementById('join-role').elements["joinRole"].value
+  let role = document.querySelector('input[name="joinRole"]:checked').value
 
   let token = await getSignature(topic, role, password)
   console.log("topic: "+topic+", token: "+token+", userName: "+userName+", password: "+password);
@@ -109,12 +97,19 @@ async function joinSession() {
     stream = client.getMediaStream();
     var n = client.getCurrentUserInfo();
     var m = client.getSessionInfo();
-    var sessionId = m.sessionId;
+    sessionId = m.sessionId;
     console.log("getCurrentUserInfo: ", n);
     console.log("get Session ID: ", sessionId);
     console.log("Connection Success");
     cameraStartStop(); //automatically unmute camera when join
     audioStart(); //automatically start audio
+    rtmsClient = client.getRealTimeMediaStreamsClient()
+    console.log("[RTMS] rtmsClient:", rtmsClient)
+    console.log("[RTMS] isSupportRealTimeMediaStreams:", rtmsClient.isSupportRealTimeMediaStreams())
+    console.log("[RTMS] canStartRealTimeMediaStreams:", rtmsClient.canStartRealTimeMediaStreams())
+    console.log("[RTMS] getRealTimeMediaStreamsStatus:", rtmsClient.getRealTimeMediaStreamsStatus())
+    console.log("[RTMS] getCurrentUserInfo:", client.getCurrentUserInfo())
+    updateRTMSButtons();
   }).catch((error) => {
     console.log(error)
   })
@@ -137,7 +132,7 @@ function leaveSession() {
 async function audioStart() {
   try{
     await stream.startAudio()
-    console.log(`${now()} audioStart`)
+    console.log(Date(Date.now()) + " audioStart")
   } catch (e){
     console.log(e)
   }
@@ -148,7 +143,7 @@ async function cameraStartStop() {
 
   let isVideoOn = await stream.isCapturingVideo()
   console.log(Date(Date.now())+"cameraStartStop isCapturingVideo: " + isVideoOn)
-  let localVideoTrack = ZoomVideo.createLocalVideoTrack() // USED FOR DENDER SELF_VIDEO WITH VIDEO TAG
+  let localVideoTrack = ZoomVideo.createLocalVideoTrack() // USED FOR RENDER SELF_VIDEO WITH VIDEO TAG
   var n = client.getCurrentUserInfo()
   console.log("getCurrentUserInfo: ", n)
 
@@ -170,14 +165,13 @@ const toggleSelfVideo = async (mediaStream,localVideoTrack, userId, isVideoOn) =
     if (isVideoOn) {
         console.log(Date(Date.now())+"toggleSelfVideo start")
         await localVideoTrack.start(selfVideo)
-        await stream.startVideo({videoElement: selfVideo,hd:true}) 
-        //HD Trueを入れることで、最初からCaptureを720pに固定することが可能
-	isVideoOn = true
+        await stream.startVideo({videoElement: selfVideo,hd:true})
+        isVideoOn = true
         console.log(Date(Date.now())+"Near end video rendering started.")
     } else {
         console.log("toggleSelfVideo stop")
         await localVideoTrack.stop()
-        await steam.stopVideo()
+        await stream.stopVideo()
         isVideoOn = false
     }
 }
@@ -220,25 +214,80 @@ let len = 10
  }
 }
 
-//WAOT FOR AUDIO DECODER
-async function waitForAudioDecoder(ms){
-let len = 10
- for (let i = 0; i < len; i++) {
-  await sleep(ms)
-  console.log("Trying to wait for audio decoder: " + i)
-   if(audioDecode){
-     console.log("audioStart ready.")
-     audioStart();
-     break
-   }
- }
-}
-
 //SLEEP(WAIT)
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+////////////////////////////////////////////////////////////////////////
+// RTMS START / STOP
+
+// RealTimeMediaStreamsStatus enum: 0 = Initial/Idle, 1 = Started, 3 = Stopped
+const RTMS_STATUS_STARTED = 1
+const RTMS_STATUS_STOPPED = 3
+
+async function startRTMS() {
+  setRTMSStatus('Starting RTMS...')
+  try {
+    await rtmsClient.startRealTimeMediaStreams()
+    await waitForRTMSStatus(RTMS_STATUS_STARTED, 10000)
+  } catch (e) {
+    setRTMSStatus('RTMS start error: ' + JSON.stringify(e))
+    console.log('startRTMS error:', e)
+  }
+}
+
+async function stopRTMS() {
+  setRTMSStatus('Stopping RTMS...')
+  try {
+    await rtmsClient.stopRealTimeMediaStreams()
+    await waitForRTMSStatus(RTMS_STATUS_STOPPED, 10000)
+  } catch (e) {
+    setRTMSStatus('RTMS stop error: ' + JSON.stringify(e))
+    console.log('stopRTMS error:', e)
+  }
+}
+
+async function waitForRTMSStatus(expectedStatus, timeoutMs) {
+  const interval = 500
+  const maxTries = timeoutMs / interval
+  for (let i = 0; i < maxTries; i++) {
+    var status = rtmsClient.getRealTimeMediaStreamsStatus()
+    console.log('[RTMS] waitForRTMSStatus - current:', status, 'expected:', expectedStatus)
+    if (status === expectedStatus) {
+      var label = expectedStatus === RTMS_STATUS_STARTED ? 'Started' : 'Stopped'
+      setRTMSStatus('RTMS ' + label + '.')
+      updateRTMSButtons()
+      return
+    }
+    await sleep(interval)
+  }
+  setRTMSStatus('RTMS status timeout (current: ' + rtmsClient.getRealTimeMediaStreamsStatus() + ')')
+  updateRTMSButtons()
+}
+
+function updateRTMSButtons() {
+  var startBtn = document.getElementById('rtms-start-button')
+  var stopBtn = document.getElementById('rtms-stop-button')
+  if (rtmsClient) {
+    var canStart = rtmsClient.canStartRealTimeMediaStreams()
+    var status = rtmsClient.getRealTimeMediaStreamsStatus()
+    var isRunning = status === RTMS_STATUS_STARTED
+    console.log("[RTMS] updateRTMSButtons - canStart:", canStart, "status:", status, "isRunning:", isRunning)
+    startBtn.disabled = !canStart || isRunning
+    stopBtn.disabled = !isRunning
+  } else {
+    console.log("[RTMS] updateRTMSButtons - rtmsClient is null")
+    startBtn.disabled = true
+    stopBtn.disabled = true
+  }
+}
+
+function setRTMSStatus(msg) {
+  console.log('RTMS: ' + msg)
+  document.getElementById('rtms-status').textContent = msg
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -271,7 +320,7 @@ function getSignature(topic, role, password) {
         body["topic"] = topic
         body["role"] = parseInt(role)
         body["password"] = password
-	console.log("sending JSON request with this body: "+body)
+        console.log("sending JSON request with this body: "+body)
         xhr.send(JSON.stringify(body))
     })
 }

@@ -13,3 +13,42 @@ For details, please visit [Zoom Video SDK for web](https://developers.zoom.us/do
 
 ## Notes
 You will need to run this on a SSL certified web server. If you run locally, you might need to use a CORS test Chrome extensions such as [Allow CORS: Access-Control-Allow-origin](https://chrome.google.com/webstore/detail/allow-cors-access-control/lhobafahddgcelffkeicbaginigeejlf/) before start.
+
+# Real-Time Media Streams (RTMS)
+
+This sample includes RTMS (Real-Time Media Streams) start/stop functionality using the Video SDK's `RealTimeMediaStreamsClient`.
+
+## What is RTMS?
+
+RTMS allows you to stream live audio and video from a Video SDK session to an external server in real time. This is useful for building features such as live transcription, recording, analytics, and AI-powered media processing.
+
+For details, visit [Zoom RTMS documentation](https://developers.zoom.us/docs/video-sdk/rtms/).
+
+## How RTMS works in this sample
+
+After joining a session as **Host**, two buttons appear:
+
+- **Start RTMS** — calls `rtmsClient.startRealTimeMediaStreams()` to begin streaming media to the registered RTMS endpoint.
+- **Stop RTMS** — calls `rtmsClient.stopRealTimeMediaStreams()` to stop the stream.
+
+Button states are controlled by polling `rtmsClient.getRealTimeMediaStreamsStatus()`, which returns the following numeric values:
+
+| Value | Meaning |
+|-------|---------|
+| `0` | Initial (never started) |
+| `1` | Started (streaming) |
+| `3` | Stopped |
+
+## Prerequisites for RTMS
+
+- You must join as **Host** (Role: 1). RTMS cannot be started by a Participant.
+- RTMS must be enabled for your Video SDK app in the [Zoom App Marketplace](https://marketplace.zoom.us/).
+- An RTMS-compatible receiver server must be running and registered to your app to receive the media stream. This sample only handles the client-side start/stop; the receiver server is out of scope.
+
+## Deploy to GCP Cloud Run
+
+```bash
+gcloud run deploy vsdkbasicrtms --source . --platform managed --allow-unauthenticated --region asia-northeast1
+```
+
+The app listens on port `8080` (configured via `ENV PORT=8080` in the Dockerfile).
